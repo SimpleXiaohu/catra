@@ -1,7 +1,7 @@
-import Dependencies._
+import Dependencies.*
 
 ThisBuild / scalaVersion := "2.13.10"
-ThisBuild / version := "0.1.0-SNAPSHOT"
+ThisBuild / version := "0.1.2"
 ThisBuild / organization := "uuverifiers"
 
 ThisBuild / scalacOptions ++= Seq(
@@ -9,17 +9,18 @@ ThisBuild / scalacOptions ++= Seq(
   //"-Xfatal-warnings",
   "-Xdisable-assertions",
   "-unchecked",
-  "-Xlint",
+  //"-Xlint",
   "-Xelide-below",
   "INFO",
   "-feature",
-  "-opt-inline-from:**",
+  /*"-opt-inline-from:**",
   "-opt:l:method",
   "-opt:l:inline",
   "-opt:unreachable-code",
   "-opt:copy-propagation",
   "-opt:redundant-casts",
   "-opt:box-unbox",
+   */
   "-Ywarn-dead-code",
   "-Ywarn-unused"
 )
@@ -39,5 +40,26 @@ lazy val root = (project in file("."))
   .settings(
     name := "uuverifiers/catra",
     libraryDependencies += scalaTest % Test,
-    libraryDependencies += scalaCheck % Test
+    libraryDependencies += scalaCheck % Test,
+    assembly / mainClass := Some(
+      "uuverifiers.catra.SolveRegisterAutomata"
+    )
   )
+
+lazy val benchmark = (project in file("benchmark"))
+  .settings(
+    name := "catra-benchmark",
+    version := s"${version.value}-4", // Version scheme is CATRA version - benchmark version
+    assembly / mainClass := Some(
+      "uuverifiers.RunBenchmarks"
+    )
+  ) dependsOn root
+
+lazy val validator = (project in file("validator"))
+  .settings(
+    name := "catra-validate",
+    version := s"${version.value}-4", // Version scheme is CATRA version - validator version
+    libraryDependencies +=
+      "org.scala-lang.modules" %% "scala-parallel-collections" % "1.0.4",
+    assembly / mainClass := Some("uuverifiers.Validate")
+  ) dependsOn root

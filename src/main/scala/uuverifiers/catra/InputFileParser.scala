@@ -2,6 +2,7 @@ package uuverifiers.catra
 import ap.SimpleAPI
 import ap.terfor.ConstantTerm
 import ap.parser.{IBoolLit, IFormula, ITerm, ITimes}
+import fastparse.Parsed
 import uuverifiers.common.{
   Automaton,
   AutomatonBuilder,
@@ -11,7 +12,9 @@ import uuverifiers.common.{
   Tracing
 }
 
+import java.math.BigInteger
 import scala.collection.mutable
+import scala.io.Source
 
 sealed case class Constant(value: Int) extends Term {
   override def toPrincess(counterConstants: Map[Counter, ConstantTerm]): ITerm =
@@ -42,11 +45,18 @@ sealed abstract class Atom extends Formula {
 sealed case class Inequality(
     lhs: Term,
     inequality: InequalitySymbol,
-    rhs: Term,
-    isPositive: Boolean = true
+    rhs: Term
 ) extends Atom {
-  def negated(): Inequality =
-    Inequality(this.lhs, this.inequality, this.rhs, !this.isPositive)
+  def negated(): Inequality = {
+    inequality match {
+      case LessThan           => Inequality(lhs, GreaterThanOrEqual, rhs)
+      case GreaterThan        => Inequality(lhs, LessThanOrEqual, rhs)
+      case Equals             => Inequality(lhs, NotEquals, rhs)
+      case GreaterThanOrEqual => Inequality(lhs, LessThan, rhs)
+      case LessThanOrEqual    => Inequality(lhs, GreaterThan, rhs)
+      case NotEquals          => Inequality(lhs, Equals, rhs)
+    }
+  }
 
   override def toPrincess(
       counterConstants: Map[Counter, ConstantTerm]
@@ -72,7 +82,7 @@ sealed case class Inequality(
 
   override def counters(): Set[Counter] = lhs.counters() union rhs.counters()
   override def toString: String =
-    s"($lhs) ${inequality.serialise(isPositive)} ($rhs)"
+    s"($lhs) ${inequality.serialise()} ($rhs)"
 }
 
 sealed case class TrueOrFalse(isTrue: Boolean) extends Atom with Formula {
@@ -111,32 +121,26 @@ sealed case class Sum(terms: Seq[Term]) extends Term {
 }
 
 sealed trait InequalitySymbol {
-  def serialise(isPositive: Boolean): String
+  def serialise(): String
 }
 
 case object LessThan extends InequalitySymbol {
-  override def serialise(isPositive: Boolean): String =
-    if (isPositive) "<" else ">="
+  override def serialise(): String = "<"
 }
 case object GreaterThan extends InequalitySymbol {
-  override def serialise(isPositive: Boolean): String =
-    if (isPositive) ">" else "<="
+  override def serialise(): String = ">"
 }
 case object Equals extends InequalitySymbol {
-  override def serialise(isPositive: Boolean): String =
-    if (isPositive) "==" else "!="
+  override def serialise(): String = "=="
 }
 case object GreaterThanOrEqual extends InequalitySymbol {
-  override def serialise(isPositive: Boolean): String =
-    if (isPositive) ">=" else "<"
+  override def serialise(): String = ">="
 }
 case object LessThanOrEqual extends InequalitySymbol {
-  override def serialise(isPositive: Boolean): String =
-    if (isPositive) "<=" else ">"
+  override def serialise(): String = "<="
 }
 case object NotEquals extends InequalitySymbol {
-  override def serialise(isPositive: Boolean): String =
-    if (isPositive) "==" else "!="
+  override def serialise(): String = "=="
 }
 
 sealed trait Formula extends DocumentFragment {
@@ -187,7 +191,7 @@ class InputFileParser extends Tracing {
   import fastparse._
   import JavaWhitespace._
 
-  def automatonFromFragments(
+  private def automatonFromFragments(
       name: String,
       fragments: Seq[AutomatonFragment]
   ): Automaton = {
@@ -218,7 +222,7 @@ class InputFileParser extends Tracing {
     builder.getAutomaton()
   }
 
-  def documentToInstance(fragments: Seq[DocumentFragment]): Instance =
+  private def documentToInstance(fragments: Seq[DocumentFragment]): Instance =
     trace("documentToInstance") {
       var groupedAutomata: Seq[Seq[Automaton]] = Seq()
       var counters = List[Counter]()
@@ -236,26 +240,31 @@ class InputFileParser extends Tracing {
       Instance(counters, groupedAutomata, constraints)
     }
 
-  def digit[A : P]: P[Unit] = P(CharIn("0-9"))
-  def asciiLetter[A : P]: P[Unit] = CharIn("A-Z") | CharIn("a-z") | "_"
-  def counterType[A : P]: P[String] = P("int").!
-  def constant[A : P]: P[Int] =
+  private def digit[A : P]: P[Unit] = P(CharIn("0-9"))
+  private def asciiLetter[A : P]: P[Unit] = CharIn("A-Z") | CharIn("a-z") | "_"
+  private def counterType[A : P]: P[String] = P("int").!
+  private def charLiteral[A : P]: P[Char] = {
+    P(
+      "#" ~ (CharIn("A-Z") | CharIn("a-z")).!.map(_.charAt(0))
+        | ("0" | (CharIn("1-9") ~ digit.rep(0))).!.map(_.toInt.toChar)
+    )
+  }
+  private def constant[A : P]: P[Int] =
     P("-".? ~ ("0" | (CharIn("1-9") ~ digit.rep(0)))).!.map(_.toInt)
   // FIXME I don't like how NotEquals isn't negated equals, but there is no
   // clean way I can think of to fix it.
   def atom[A : P]: P[Atom] =
     P(
       (sum ~ inequalitySymbol ~ sum).map {
-        case (lhs, inequality, rhs) => {
+        case (lhs, inequality, rhs) =>
           ap.util.Timeout.check
           Inequality(lhs, inequality, rhs)
-        }
       }
         | "true".!.map(_ => TrueOrFalse(true))
         | "false".!.map(_ => TrueOrFalse(false))
     )
 
-  def inequalitySymbol[A : P]: P[InequalitySymbol] =
+  private def inequalitySymbol[A : P]: P[InequalitySymbol] =
     P(
       "=".!.map(_ => Equals)
         | ">=".!.map(_ => GreaterThanOrEqual)
@@ -265,15 +274,15 @@ class InputFileParser extends Tracing {
         | "!=".!.map(_ => NotEquals)
     )
 
-  def constantOrIdentifier[A : P]: P[Term] =
+  private def constantOrIdentifier[A : P]: P[Term] =
     P(
       (constant ~ "*".? ~ identifier.!).map {
         case (k, x) =>
           CounterWithCoefficient(k, Counter(x))
       }
-        | constant.map(Constant(_))
+        | constant.map(Constant)
         | "-" ~~ identifier.!.map(x => CounterWithCoefficient(-1, Counter(x)))
-        | identifier.!.map(Counter(_))
+        | identifier.!.map(Counter)
     )
 
   def sum[A : P]: P[Sum] =
@@ -289,7 +298,7 @@ class InputFileParser extends Tracing {
         | constantOrIdentifier.map(t => Sum(Seq(t)))
     )
 
-  def unaryExpression[A : P]: P[Formula] =
+  private def unaryExpression[A : P]: P[Formula] =
     P(
       ("!" ~ term).map(_.negated())
         | atom
@@ -297,48 +306,49 @@ class InputFileParser extends Tracing {
 
   // TODO use an enumeration for connective symbols to convince the compiler we
   // know what we're doing.
-  def connective[_A : P]: P[String] = P("&&" | "||").!
+  private def connective[_A : P]: P[String] = P("&&" | "||").!
 
-  def paren[_A : P]: P[Formula] = P("(" ~ formula ~ ")")
+  private def paren[_A : P]: P[Formula] = P("(" ~ formula ~ ")")
 
   def term[_A : P]: P[Formula] = P(unaryExpression | paren)
 
-  def binaryExpression[_A : P]: P[Formula] =
-    P(term ~ connective ~ formula).map { // Match is known to be exhaustive.
+  private def binaryExpression[_A : P]: P[Formula] =
+    P(term ~ connective ~ formula).map {
       case (l, "&&", r) => And(l, r)
       case (l, "||", r) => Or(l, r)
+      case other =>
+        throw new MatchError(s"Unexpected: $other") // Match is known to be exhaustive.
     }
 
   def formula[_A : P]: P[Formula] = P(binaryExpression | term)
 
-  def sequenceOfIdentifiers[_A : P]: P[Seq[String]] =
+  private def sequenceOfIdentifiers[_A : P]: P[Seq[String]] =
     P(identifier.rep(sep = ",", min = 1))
 
   def init[_A : P]: P[InitialState] =
-    P("init" ~ identifier ~ ";").map(InitialState(_))
+    P("init" ~ identifier ~ ";").map(InitialState)
   def accepting[_A : P]: P[AcceptingStates] =
-    P("accepting" ~ sequenceOfIdentifiers ~ ";").map(AcceptingStates(_))
-  def labelRange[_A : P]: P[SymbolicLabel] =
-    (P(
+    P("accepting" ~ sequenceOfIdentifiers ~ ";").map(AcceptingStates)
+  private def labelRange[_A : P]: P[SymbolicLabel] =
+    P(
       "[" ~
         (
-          (constant ~ "," ~ constant).map {
-            case (lower, upper) =>
-              SymbolicLabel(lower.toChar, upper.toChar)
-          }
-            | constant.map(c => SymbolicLabel.SingleChar(c.toChar))
-            | "any".!.map(_ => SymbolicLabel.AnyChar)
+          "any".!.map(_ => SymbolicLabel.AnyChar)
+            | (charLiteral ~ "," ~ charLiteral).map {
+              case (lower, upper) => SymbolicLabel(lower, upper)
+            }
+            | charLiteral.map(c => SymbolicLabel.SingleChar(c))
         )
         ~
           "]"
-    ))
-  def incrementOrDecrement[_A : P]: P[Int] =
+    )
+  private def incrementOrDecrement[_A : P]: P[Int] =
     P(
       ("+".!.map(_ => 1)
         | "-".!.map(_ => -1))
         ~ P("=")
     )
-  def counterOperation[_A : P]: P[(Counter, Int)] =
+  private def counterOperation[_A : P]: P[(Counter, Int)] =
     P(identifier ~ incrementOrDecrement ~ constant).map {
       case (counterName, coefficient, offset) =>
         (Counter(counterName), coefficient * offset)
@@ -352,47 +362,77 @@ class InputFileParser extends Tracing {
           Transition(from, to, label, increments.getOrElse(Map()).toMap)
       }
 
-  def constraintDefinition[_A : P]: P[Formula] = P("constraint" ~/ formula)
+  private def constraintDefinition[_A : P]: P[Formula] =
+    P("constraint" ~/ formula)
 
-  def automatonDefinition[_A : P]: P[Automaton] =
+  private def automatonDefinition[_A : P]: P[Automaton] =
     P(
       "automaton" ~/ identifier ~ "{" ~ (init | accepting | transition).rep ~ "}"
     ).map { case (name, fragments) => automatonFromFragments(name, fragments) }
 
   /**
-   * An identifer is any combination of letters and numbers, starting with a
+   * An identifier is any combination of letters and numbers, starting with a
    * letter.
    */
-  def identifier[_A : P]: P[String] =
+  private def identifier[_A : P]: P[String] =
     P(asciiLetter.rep(1) ~ (digit | asciiLetter | "_").rep(0)).!
-  def counterDefinition[_A : P]: P[CounterDefinition] =
+  private def counterDefinition[_A : P]: P[CounterDefinition] =
     P(
       "counter" ~/ counterType ~ identifier.rep(sep = ",", min = 1)
     ).map {
-      case (_, counters) => {
+      case (_, counters) =>
         // TODO handle types when we have them.
-        CounterDefinition(counters.map(Counter(_)))
-      }
+        CounterDefinition(counters.map(Counter))
     }
 
-  def productDefinition[_A : P]: P[AutomatonGroup] = {
+  private def productDefinition[_A : P]: P[AutomatonGroup] = {
     P("synchronised" ~/ "{" ~ (automatonDefinition ~ ";").rep() ~ "}")
-      .map(AutomatonGroup(_))
+      .map(AutomatonGroup)
   }
 
-  def expression[_A : P]: P[DocumentFragment] =
+  private def expression[_A : P]: P[DocumentFragment] =
     P(
       counterDefinition | constraintDefinition | automatonDefinition.map(
         a => AutomatonGroup(Seq(a))
       )
         | productDefinition
     )
-  def document[_A : P]: P[Instance] =
-    P((expression ~ ";").rep(1)).map(documentToInstance(_))
+  private def document[_A : P]: P[Instance] =
+    P((expression ~ ";").rep(1)).map(documentToInstance)
   def parser[_A : P]: P[Instance] = P(" ".rep ~ document ~ End)
 }
 
 object InputFileParser {
+
+  /**
+   * Generate a constraint that describes a satisfying assignment.
+   *
+   * @param assignments Assignments from counters to their values
+   * @return A Formula describing assignments (or True if assignments
+   *         are empty)
+   */
+  def assignmentAsConstraint(assignments: Map[Counter, BigInteger]): Formula = {
+    assignments
+      .map {
+        case (c, v) =>
+          Inequality(
+            CounterWithCoefficient(1, c),
+            Equals,
+            Constant(v.intValueExact())
+          )
+      }
+      .reduceOption(And)
+      .getOrElse(TrueOrFalse(true))
+  }
+  def parseFile(fileName: String): Parsed[Instance] = {
+    val inputFileHandle = Source.fromFile(fileName)
+    try {
+      parse(inputFileHandle.mkString(""))
+    } finally {
+      inputFileHandle.close()
+    }
+  }
+
   def parse(s: String): fastparse.Parsed[Instance] = {
     val p = new InputFileParser()
     ap.util.Timeout.withTimeoutMillis(10000) {

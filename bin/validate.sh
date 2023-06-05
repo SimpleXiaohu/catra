@@ -1,13 +1,8 @@
 #!/bin/sh
-JARFILE=./target/scala-2.13/uuverifiers/catra-assembly-0.1.0-SNAPSHOT.jar
-CURRENT_VERSION=$(git rev-parse --short HEAD)
-RAM_ALLOC=4g
-NR_THREADS=10
+set -x
+CURRENT_VERSION=$(sbt -Dsbt.supershell=false -error "print validator/version")
+LOGFILE="logs/${CURRENT_VERSION}.validation.log"
+JARFILE="validator/target/scala-2.13/catra-validate-assembly-${CURRENT_VERSION}.jar"
 
-sbt assembly
-
-parallel -j$NR_THREADS --header : \
-  --eta --results $CURRENT_VERSION.validation java -jar -Xmx${RAM_ALLOC} $JARFILE \
-  solve-satisfy --timeout 60000 \
-  --backend lazy --cross-validate {chunk} \
-  ::: chunk chunks/chunk-*
+mkdir -p logs
+java -XX:MaxRAMPercentage=90.0 -jar "$JARFILE" "$@" | tee $LOGFILE

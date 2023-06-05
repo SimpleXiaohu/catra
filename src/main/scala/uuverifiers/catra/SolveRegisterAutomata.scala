@@ -60,7 +60,7 @@ object SolveRegisterAutomata extends App with Tracing {
     (result, elapsed)
   }
 
-  def fatalError(reason: Throwable) = {
+  def fatalError(reason: Throwable): Nothing = {
     Console.err.println(reason.getMessage)
     sys.exit(1)
   }
@@ -120,11 +120,8 @@ object SolveRegisterAutomata extends App with Tracing {
 
   def runInstances(arguments: CommandLineOptions): Unit = {
     for (fileName <- arguments.inputFiles) {
-      val inputFileHandle = Source.fromFile(fileName)
-      val fileContents = inputFileHandle.mkString("")
-      inputFileHandle.close()
       val (parsed, parseTime) = measureTime(
-        InputFileParser.parse(fileContents)
+        InputFileParser.parseFile(fileName)
       )
       val (result, runtime) = measureTime {
         parsed match {

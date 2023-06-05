@@ -57,15 +57,20 @@ sealed case class CommandLineOptions(
     enableClauseLearning: Boolean,
     enableRestarts: Boolean,
     restartTimeoutFactor: Long,
-    crossValidate: Boolean,
     randomSeed: Int,
     printProof: Boolean
 ) {
   def withRandomSeed(newSeed: Int): CommandLineOptions =
     copy(randomSeed = newSeed)
 
+  def withTimeout(newTimeout: Option[Long]): CommandLineOptions =
+    copy(timeout_ms = newTimeout)
+
   def withRestartTimeoutFactor(newValue: Long): CommandLineOptions =
     copy(restartTimeoutFactor = newValue)
+
+  def withBackend(newBackend: BackendSelection): CommandLineOptions =
+    copy(backend = newBackend)
 
   def withProver[R <: Result](f: SimpleAPI => R): Try[R] =
     dumpSMTDir match {
@@ -138,7 +143,6 @@ object CommandLineOptions {
   private var enableClauseLearning: Boolean = true
   private var enableRestarts = true
   private var restartTimeoutFactor = 500L
-  private var crossValidate = false
   private var randomSeed = 1234567
   private var printProof = false
 
@@ -152,6 +156,7 @@ object CommandLineOptions {
       debug-unsat -- diagnose (an) incorrect unsat result(s)
 
     Available options (🐌 = likely to negatively impact performance):
+      --version         -- ignore everything and just print the version number.
       --print-decisions -- log partial decisions. Less verbose trace.
       --timeout milliseconds -- set the timeout in ms (default = $timeout_ms)
       --dump-smt <directory> -- dump SMT commands into this directory
@@ -235,7 +240,7 @@ object CommandLineOptions {
     (here relativize Paths.get(f.getCanonicalPath())).toString
   }
 
-  private def expandFileNameOrDirectoryOrGlob(
+  def expandFileNameOrDirectoryOrGlob(
       filePattern: String
   ): Seq[String] = {
     val expandedHomePath =
@@ -292,15 +297,14 @@ object CommandLineOptions {
       case "--dump-equations" :: directory :: tail =>
         dumpEquationDir = Some(new File(directory))
         parseFilesAndFlags(tail)
-      case "--cross-validate" :: tail =>
-        crossValidate = true
-        parseFilesAndFlags(tail)
       case "--restart-timeout-factor" :: someFactor :: tail =>
         restartTimeoutFactor = someFactor.toLong
         parseFilesAndFlags(tail)
       case "--print-proof" :: tail =>
         printProof = true
         parseFilesAndFlags(tail)
+      case "--version" :: _ =>
+        throw new RuntimeException(getVersion())
       case option :: _ if option.matches("--.*") =>
         throw new IllegalArgumentException(s"unknown option: $option!")
       case other :: tail =>
@@ -309,12 +313,16 @@ object CommandLineOptions {
     }
   }
 
+  def getVersion(): String =
+    s"catra-${getClass.getPackage.getImplementationVersion}"
+
   @tailrec
   def parseMode(args: List[String]): Unit = args match {
-    case Nil                       => throw new Exception("Error: No mode specified! \n\n" + usage)
-    case "--" :: tail              => parseMode(tail)
-    case "--help" :: _ | "-h" :: _ => throw new Exception(usage)
-    case "solve-satisfy" :: rest   => parseFilesAndFlags(rest)
+    case Nil                          => throw new Exception("Error: No mode specified! \n\n" + usage)
+    case "--" :: tail                 => parseMode(tail)
+    case "--version" :: _ | "-v" :: _ => throw new Exception(getVersion())
+    case "--help" :: _ | "-h" :: _    => throw new Exception(usage)
+    case "solve-satisfy" :: rest      => parseFilesAndFlags(rest)
     case "find-image" :: rest =>
       runMode = FindImage
       parseFilesAndFlags(rest)
@@ -323,6 +331,31 @@ object CommandLineOptions {
       parseFilesAndFlags(rest)
     case other :: _ =>
       throw new Exception(s"Error: Invalid mode `$other`!\n\n" + usage)
+  }
+
+  /**
+   * Convenience feature: produce a default set of options without parsing.
+   **/
+  def default(): CommandLineOptions = {
+    CommandLineOptions(
+      inputFiles = Seq(),
+      timeout_ms = timeout_ms,
+      printDecisions = printDecisions,
+      dumpSMTDir = dumpSMTDir,
+      dumpGraphvizDir = dumpGraphvizDir,
+      runMode = runMode,
+      backend = backend,
+      checkTermSat = !noCheckTermSat,
+      checkIntermediateSat = !noCheckIntermediateSat,
+      eliminateQuantifiers = !noEliminateQuantifiers,
+      dumpEquationDir = dumpEquationDir,
+      nrUnknownToMaterialiseProduct = nrUnknownToStartMaterialiseProduct,
+      enableClauseLearning = enableClauseLearning,
+      enableRestarts = enableRestarts,
+      restartTimeoutFactor = restartTimeoutFactor,
+      randomSeed = randomSeed,
+      printProof = printProof
+    )
   }
 
   def parse(args: Array[String]): Try[CommandLineOptions] = Try {
@@ -345,7 +378,6 @@ object CommandLineOptions {
       enableClauseLearning = enableClauseLearning,
       enableRestarts = enableRestarts,
       restartTimeoutFactor = restartTimeoutFactor,
-      crossValidate = crossValidate,
       randomSeed = randomSeed,
       printProof = printProof
     )
