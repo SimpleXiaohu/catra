@@ -65,18 +65,12 @@ sealed case class Inequality(
     val right = rhs.toPrincess(counterConstants)
 
     inequality match {
-      case LessThan if isPositive            => left < right
-      case LessThan if !isPositive           => left >= right
-      case GreaterThan if isPositive         => left > right
-      case GreaterThan if !isPositive        => left <= right
-      case Equals if isPositive              => left === right
-      case Equals if !isPositive             => left =/= right
-      case GreaterThanOrEqual if isPositive  => left >= right
-      case GreaterThanOrEqual if !isPositive => left < right
-      case LessThanOrEqual if isPositive     => left <= right
-      case LessThanOrEqual if !isPositive    => left > right
-      case NotEquals if isPositive           => left =/= right
-      case NotEquals if !isPositive          => left === right
+      case LessThan           => left < right
+      case GreaterThan        => left > right
+      case Equals             => left === right
+      case GreaterThanOrEqual => left >= right
+      case LessThanOrEqual    => left <= right
+      case NotEquals          => left =/= right
     }
   }
 
@@ -296,6 +290,7 @@ class InputFileParser extends Tracing {
             })
         }
         | constantOrIdentifier.map(t => Sum(Seq(t)))
+        | "(" ~ sum ~ ")"
     )
 
   private def unaryExpression[A : P]: P[Formula] =
